@@ -1,17 +1,26 @@
-<### Collect Active Directory information
-# Author: James Brennan, EnPointe
-# Destroyer: David Stein, EnPointe
-#
-# Version 1.2
-# 09/17/2016
-#
-### Requires the following modules:
-### ActiveDirectory, DNSServer, GroupPolicy, BestPractices
-#
-# 051016 - JB - Added parameters to specify forest and collected data
-# 091716 - DS - Ran through tidy-ish formatting and minor changes
+#requires -modules ActiveDirectory,GroupPolicy,DNSServer,BestPractices
+#requires -RunAsAdministrator
+#requires -version 3
+<#
+.DESCRIPTION
+	Collect Active Directory information and generate audit report
+.SYNOPSIS
+	Collect Active Directory information
+.PARAMETER
+
+.PARAMETER
+
+.NOTES
+	Author: James Brennan - En Pointe / PCM / Stratiform
+	Modified: David Stein - En Pointe / PCM / Stratiform
+	Original - 2016.05.10
+	Version 1609.17 - 2017.09.17
+	Version 1707.02 - 2017.08.02
+.EXAMPLE
+	.\Collection-ADInformation.ps1 -getAll -Verbose
 #>
-Param(
+
+param (
     [parameter(Mandatory=$False)] [string] $ADForest,
     [parameter(Mandatory=$False)] [switch] $getAll,
     [parameter(Mandatory=$False)] [switch] $getDC,
@@ -21,12 +30,12 @@ Param(
     [parameter(Mandatory=$False)] [switch] $getSites,
     [parameter(Mandatory=$False)] [switch] $getGPO,
     [parameter(Mandatory=$False)] [switch] $getReplication,
-    [parameter(Mandatory=$False)] [switch] $getMissingSubnets
+    [parameter(Mandatory=$False)] [switch] $getMissingSubnets,
+    [parameter(Mandatory=$False)] [string] $DataPath = ".\Data"
 )
 #
 Import-Module ActiveDirectory
 Import-Module GroupPolicy
-[string] $DataPath = ".\Data"
 
 Function Get-ActiveDirectoryForestObject {
     Param ([string]$ForestName, [System.Management.Automation.PsCredential]$Credential)
@@ -183,8 +192,8 @@ Function Find-Missing-Subnets {
     $CombineAndProcess = $False
 
     if ($ReplayLogFiles -eq $False) {
-        if (-not(Test-Path -Path $ScriptPathOutput)) {
-            Write-Host -ForegroundColor green "Creating the Output Folder: $ScriptPathOutput"
+        if (-not (Test-Path -Path $ScriptPathOutput)) {
+            Write-Verbose "Creating the Output Folder: $ScriptPathOutput"
             New-Item -Path $ScriptPathOutput -ItemType Directory | Out-Null
         }
 
@@ -198,22 +207,22 @@ Function Find-Missing-Subnets {
                 $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetDomain($context)
             }
             Catch [exception] {
-                Write-Host -ForegroundColor Red $_.Exception.Message
+                Write-Error $_.Exception.Message
                 Exit
             }
         }
 
-        Write-Host -ForegroundColor Green "Domain: $domain"
-        Write-Host -ForegroundColor Green "Getting all Domain Controllers from $domain ..."
+        Write-Output "Domain: $domain"
+        Write-Verbose "Getting all Domain Controllers from $domain ..."
         $DomainControllers = $domain | 
             ForEach-Object -Process { $_.DomainControllers } | 
                 Select-Object -Property Name
 
-        Write-Host -ForegroundColor Green "Processing each Domain controller..."
+        Write-Verbose "Processing each Domain controller..."
         foreach ($dc in $DomainControllers) {
             $DCName = $($dc.Name)
 
-            Write-Host -ForegroundColor Green "Gathering the log from $DCName..."
+            Write-Output "Gathering the log from $DCName..."
 
             if (Test-Connection -Cn $DCName -BufferSize 16 -Count 1 -ea 0 -quiet) {
 
@@ -222,63 +231,64 @@ Function Find-Missing-Subnets {
 
                 if ((Test-Path -Path $path) -and ((Get-Item -Path $path).Length -ne $null)) {
                     # Copy the NETLOGON.log locally for the current DC
-                    Write-Host -ForegroundColor Green "- Copying the $path file..."
+                    Write-Verbose "- Copying the $path file..."
                     $TotalTime = Measure-Command {Copy-Item -Path $path -Destination $ScriptPathOutput\$($dc.Name)-$DateFormat-netlogon.log}
                     $TotalSeconds = $TotalTime.TotalSeconds
-                    Write-Host -ForegroundColor Green "- Copy completed in $TotalSeconds seconds."
+                    Write-Verbose "- Copy completed in $TotalSeconds seconds."
 
                     if ((Get-Content -Path $path | Measure-Object -Line).lines -gt 0) {
                         # Export the $LogsLines last lines of the NETLOGON.log and send it to a file
                         ((Get-Content -Path $ScriptPathOutput\$DCName-$DateFormat-netlogon.log -ErrorAction Continue)[-$LogsLines .. -1]) | 
                         Foreach-Object {$_ -replace "\[\d{1,5}\] ", ""} |
                             Out-File -FilePath "$ScriptPathOutput\$DCName.txt" -ErrorAction 'Continue' -ErrorVariable ErrorOutFileNetLogon
-                        Write-Host -ForegroundColor Green "- Exported the last $LogsLines lines to $ScriptPathOutput\$DCName.txt."
+                        Write-Verbose "- Exported the last $LogsLines lines to $ScriptPathOutput\$DCName.txt."
                     }
                     else {
-                        Write-Host -ForegroundColor Green "- File Empty."
+                        Write-Verbose "- File Empty."
                     }
                 } 
                 else {
-                    Write-Host -ForegroundColor Red "- $DCName is not reachable via the $path path."
+                    Write-Warning "- $DCName is not reachable via the $path path."
                 }
             } 
             else {
-                Write-Host -ForegroundColor Red "- $DCName is not reachable or offline."
+                Write-Warning "- $DCName is not reachable or offline."
             }
             $CombineAndProcess = $True
         }
     } 
     else {
-        Write-Host -ForegroundColor Green "Replaying the log files..."
+        Write-Verbose "Replaying the log files..."
         if (Test-Path -Path $ScriptPathOutput) {
             if ((Get-ChildItem $scriptpathoutput\*.log | Measure-Object).Count -gt 0) {
                 $LogFiles = Get-ChildItem $scriptpathoutput\*.log
                 ForEach ($LogFile in $LogFiles) {
                     $DCName = $LogFile.Name -Replace("-\d{7,8}_\d{6}-netlogon.log")
-                    Write-Host -ForegroundColor Green "Processing the log from $DCName..."
+                    Write-Verbose "Processing the log from $DCName..."
                     if ((Get-Content -Path "$ScriptPathOutput\$($LogFile.Name)" | Measure-Object -Line).lines -gt 0) {
                         # Export the $LogsLines last lines of the NETLOGON.log and send it to a file
                         ((Get-Content -Path "$ScriptPathOutput\$($LogFile.Name)" -ErrorAction Continue)[-$LogsLines .. -1]) | 
                         Foreach-Object {$_ -replace "\[\d{1,5}\] ", ""} |
                             Out-File -FilePath "$ScriptPathOutput\$DCName.txt" -ErrorAction 'Continue' -ErrorVariable ErrorOutFileNetLogon
-                        Write-Host -ForegroundColor Green "- Exported the last $LogsLines lines to $ScriptPathOutput\$DCName.txt."
+                        Write-Verbose "- Exported the last $LogsLines lines to $ScriptPathOutput\$DCName.txt."
                     } 
                     else {
-                        Write-Host -ForegroundColor Green "- File Empty."
+                        Write-Verbose "- File Empty."
                     }
                     $CombineAndProcess = $True
                 }
             } 
             else {
-                Write-Host -ForegroundColor Red "There are no log files to process."
+                Write-Verbose "- There are no log files to process."
             }
         } 
         else {
-            Write-Host -ForegroundColor Red "The $ScriptpathOutput folder is missing."
+            Write-Warning "The $ScriptpathOutput folder is missing."
         }
     }
 
     if ($CombineAndProcess) {
+    	Write-Verbose "Combine and Process: True"
         $FilesToCombine = Get-Content -Path "$ScriptPathOutput\*.txt" -Exclude "*All_Export.txt" -ErrorAction SilentlyContinue |
             Foreach-Object {$_ -replace "\[\d{1,5}\] ", ""}
 
@@ -286,18 +296,18 @@ Function Find-Missing-Subnets {
             $FilesToCombine | Out-File -FilePath $ScriptPathOutput\$dateformat-All_Export.txt
 
             # Convert the TXT file to a CSV format
-            Write-Host -ForegroundColor Green "Importing exported data to a CSV format..."
+            Write-Verbose "Importing exported data to a CSV format..."
             $importString = Import-Csv -Path $ScriptPathOutput\$dateformat-All_Export.txt -Delimiter ' ' -Header Date,Time,Domain,Error,Name,IPAddress
 
             # Get Only the entries for the Missing Subnets
             $MissingSubnets = $importString | 
                 Where-Object {$_.Error -like "*NO_CLIENT_SITE*"}
-            Write-Host -ForegroundColor Green "Total of NO_CLIENT_SITE errors found within the last $LogsLines lines across all log files: $($MissingSubnets.count)"
+            Write-Output "Total of NO_CLIENT_SITE errors found within the last $LogsLines lines across all log files: $($MissingSubnets.count)"
             # Get the other errors from the log
             $OtherErrors = Get-Content $ScriptPathOutput\$dateformat-All_Export.txt | 
                 Where-Object {$_ -notlike "*NO_CLIENT_SITE*"} | 
                     Sort-Object -Unique
-            Write-Host -ForegroundColor Green "Total of other Error(s) found within the last $LogsLines lines across all log files: $($OtherErrors.count)"
+            Write-Output "Total of other Error(s) found within the last $LogsLines lines across all log files: $($OtherErrors.count)"
 
             # Export to a CSV File
             $UniqueIPAddresses = $importString | 
@@ -308,14 +318,14 @@ Function Find-Missing-Subnets {
             # Remove the quotes
             (Get-Content "$OutputFile") | % {$_ -replace '"',""} | 
                 Out-File "$OutputFile" -Force -Encoding ascii
-            Write-Host -ForegroundColor Green "$($UniqueIPAddresses.count) unique IP Addresses exported to $OutputFile."
+            Write-Verbose "$($UniqueIPAddresses.count) unique IP Addresses exported to $OutputFile."
         }
         else {
-            Write-Host -ForegroundColor Red "No .txt files to process."
+            Write-Verbose "- No .txt files to process."
         }
 
         if ($Cleanup) {
-            Write-Host -ForegroundColor Green "Removing the .txt and .log files..."
+            Write-Verbose "Cleanup: Removing the .txt and .log files..."
             Remove-Item -Path $ScriptpathOutput\*.txt -Force
             Remove-Item -Path $ScriptPathOutput\*.log -Force
         }
@@ -395,7 +405,7 @@ if ($getAll -eq $true -or $getDC -eq $true) {
         $PingHost = Test-Connection -ComputerName $DCName -Quiet
         Write-Output "DC Name: $DCName"
         if (!$Pinghost) {
-            Write-Host "Return Ping: $Pinghost" -Foreground Red 
+            Write-Output "Return Ping: $Pinghost"
         } 
         else { 
             Write-Output "Return Ping: $Pinghost" 
@@ -484,7 +494,7 @@ if ($getAll -eq $true -or $getSites -eq $true) {
 # Check Replication
 if ($getAll -eq $true -or $getReplication -eq $true) {
     Write-Output "Collecting DC Diagnostics Information..."
-    Write-Host "`tNote: this step might take a minute or two..." -ForegroundColor Green
+    Write-Output "`tNote: this step might take a minute or two..."
     dcdiag /a /c /v /f:$LogFile-dcdiag.log
     Write-Output "Counting test output errors..."
     $dcErrors = Get-Content $LogFile-dcdiag.log | ?{$_ -like "*failed test*"}
